@@ -29,13 +29,13 @@ class conv_block(nn.Module):
     def __init__(self, in_channels, out_channels, k_size=3, stride=1, padding=1):
         super(conv_block, self).__init__()
         self.conv = nn.Sequential(
-            nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
+            nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
                       stride=stride, padding=padding),
-            nn.BatchNorm3d(num_features=out_channels),
+            nn.BatchNorm2d(num_features=out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=k_size,
+            nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=k_size,
                       stride=stride, padding=padding),
-            nn.BatchNorm3d(num_features=out_channels),
+            nn.BatchNorm2d(num_features=out_channels),
             nn.ReLU(inplace=True))
 
     def forward(self, x):
@@ -53,9 +53,9 @@ class up_conv(nn.Module):
         super(up_conv, self).__init__()
         self.up = nn.Sequential(
             nn.Upsample(scale_factor=2),
-            nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
+            nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
                       stride=stride, padding=padding),
-            nn.BatchNorm3d(num_features=out_channels),
+            nn.BatchNorm2d(num_features=out_channels),
             nn.ReLU(inplace=True))
 
     def forward(self, x):
@@ -72,18 +72,18 @@ class Attention_block(nn.Module):
         super(Attention_block, self).__init__()
 
         self.W_g = nn.Sequential(
-            nn.Conv3d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm3d(F_int)
+            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
         )
 
         self.W_x = nn.Sequential(
-            nn.Conv3d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm3d(F_int)
+            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
         )
 
         self.psi = nn.Sequential(
-            nn.Conv3d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm3d(1),
+            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(1),
             nn.Sigmoid()
         )
 
@@ -110,10 +110,10 @@ class AttU_Net(nn.Module):
         n1 = 64
         filters = [n1, n1 * 2, n1 * 4, n1 * 8, n1 * 16]
 
-        self.Maxpool1 = nn.MaxPool3d(kernel_size=2, stride=2)
-        self.Maxpool2 = nn.MaxPool3d(kernel_size=2, stride=2)
-        self.Maxpool3 = nn.MaxPool3d(kernel_size=2, stride=2)
-        self.Maxpool4 = nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Maxpool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.Maxpool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.Maxpool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.Maxpool4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.Conv1 = conv_block(img_ch, filters[0])
         self.Conv2 = conv_block(filters[0], filters[1])
@@ -137,7 +137,7 @@ class AttU_Net(nn.Module):
         self.Att2 = Attention_block(F_g=filters[0], F_l=filters[0], F_int=32)
         self.Up_conv2 = conv_block(filters[1], filters[0])
 
-        self.Conv = nn.Conv3d(filters[0], output_ch, kernel_size=1, stride=1, padding=0)
+        self.Conv = nn.Conv2d(filters[0], output_ch, kernel_size=1, stride=1, padding=0)
 
         # self.active = torch.nn.Sigmoid()
 

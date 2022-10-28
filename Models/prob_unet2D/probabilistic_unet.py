@@ -1,14 +1,10 @@
 #This code is based on: https://github.com/SimonKohl/probabilistic_unet
 
-from logging import log
+from Models.prob_unet2D.unet_blocks import *
+from Models.prob_unet2D.unet import Unet
+from Models.prob_unet2D.utils import init_weights,init_weights_orthogonal_normal, l2_regularisation
 import torch.nn.functional as F
-from Models.prob_unet.unet import Unet
-from Models.prob_unet.unet_blocks import *
-from Models.prob_unet.utils import (init_weights,
-                                    init_weights_orthogonal_normal,
-                                    ce_loss)
-from torch.distributions import Independent, Normal, kl
-from torch.cuda.amp import autocast
+from torch.distributions import Normal, Independent, kl
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -37,13 +33,13 @@ class Encoder(nn.Module):
             output_dim = num_filters[i]
             
             if i != 0:
-                layers.append(nn.AvgPool3d(kernel_size=2, stride=2, padding=0, ceil_mode=True))
+                layers.append(nn.AvgPool2d(kernel_size=2, stride=2, padding=0, ceil_mode=True))
             
-            layers.append(nn.Conv3d(input_dim, output_dim, kernel_size=3, padding=int(padding)))
+            layers.append(nn.Conv2d(input_dim, output_dim, kernel_size=3, padding=int(padding)))
             layers.append(nn.ReLU(inplace=True))
 
             for _ in range(no_convs_per_block-1):
-                layers.append(nn.Conv3d(output_dim, output_dim, kernel_size=3, padding=int(padding)))
+                layers.append(nn.Conv2d(output_dim, output_dim, kernel_size=3, padding=int(padding)))
                 layers.append(nn.ReLU(inplace=True))
 
         self.layers = nn.Sequential(*layers)
@@ -71,7 +67,7 @@ class AxisAlignedConvGaussian(nn.Module):
         else:
             self.name = 'Prior'
         self.encoder = Encoder(self.input_channels, self.num_filters, self.no_convs_per_block, initializers, posterior=self.posterior)
-        self.conv_layer = nn.Conv3d(num_filters[-1], 2 * self.latent_dim, kernel_size=1, stride=1)
+        self.conv_layer = nn.Conv2d(num_filters[-1], 2 * self.latent_dim, (1,1), stride=1)
         self.show_img = 0
         self.show_seg = 0
         self.show_concat = 0
@@ -81,7 +77,6 @@ class AxisAlignedConvGaussian(nn.Module):
         nn.init.kaiming_normal_(self.conv_layer.weight, mode='fan_in', nonlinearity='relu')
         nn.init.normal_(self.conv_layer.bias)
 
-    #@autocast(enabled=False)
     def forward(self, input, segm=None):
 
         #If segmentation is not none, concatenate the mask to the channel axis of the input
@@ -95,16 +90,14 @@ class AxisAlignedConvGaussian(nn.Module):
         encoding = self.encoder(input)
         self.show_enc = encoding
 
-        #We only want the mean of the resulting dxhxw image
+        #We only want the mean of the resulting hxw image
         encoding = torch.mean(encoding, dim=2, keepdim=True)
         encoding = torch.mean(encoding, dim=3, keepdim=True)
-        encoding = torch.mean(encoding, dim=4, keepdim=True) #Added by Soumick for 3D
 
         #Convert encoding to 2 x latent dim and split up for mu and log_sigma
         mu_log_sigma = self.conv_layer(encoding)
 
-        #We squeeze the second dimension thrice for 3D or twice for 2D, since otherwise it won't work when batch size is equal to 1
-        mu_log_sigma = torch.squeeze(mu_log_sigma, dim=2)
+        #We squeeze the second dimension twice, since otherwise it won't work when batch size is equal to 1
         mu_log_sigma = torch.squeeze(mu_log_sigma, dim=2)
         mu_log_sigma = torch.squeeze(mu_log_sigma, dim=2)
 
@@ -114,8 +107,6 @@ class AxisAlignedConvGaussian(nn.Module):
         #This is a multivariate normal with diagonal covariance matrix sigma
         #https://github.com/pytorch/pytorch/pull/11178
         dist = Independent(Normal(loc=mu, scale=torch.exp(log_sigma)),1)
-        # cov = torch.stack([torch.diag(sigma) for sigma in torch.exp(log_sigma)])
-        # dist = torch.distributions.multivariate_normal.MultivariateNormal(mu.float(), cov.float())
         return dist
 
 class Fcomb(nn.Module):
@@ -128,7 +119,7 @@ class Fcomb(nn.Module):
         self.num_channels = num_output_channels #output channels
         self.num_classes = num_classes
         self.channel_axis = 1
-        self.spatial_axes = [2,3,4] #4 added for 3D
+        self.spatial_axes = [2,3]
         self.num_filters = num_filters
         self.latent_dim = latent_dim
         self.use_tile = use_tile
@@ -139,16 +130,16 @@ class Fcomb(nn.Module):
             layers = []
 
             #Decoder of N x a 1x1 convolution followed by a ReLU activation function except for the last layer
-            layers.append(nn.Conv3d(self.num_filters[0]+self.latent_dim, self.num_filters[0], kernel_size=1))
+            layers.append(nn.Conv2d(self.num_filters[0]+self.latent_dim, self.num_filters[0], kernel_size=1))
             layers.append(nn.ReLU(inplace=True))
 
             for _ in range(no_convs_fcomb-2):
-                layers.append(nn.Conv3d(self.num_filters[0], self.num_filters[0], kernel_size=1))
+                layers.append(nn.Conv2d(self.num_filters[0], self.num_filters[0], kernel_size=1))
                 layers.append(nn.ReLU(inplace=True))
 
             self.layers = nn.Sequential(*layers)
 
-            self.last_layer = nn.Conv3d(self.num_filters[0], self.num_classes, kernel_size=1)
+            self.last_layer = nn.Conv2d(self.num_filters[0], self.num_classes, kernel_size=1)
 
             if initializers['w'] == 'orthogonal':
                 self.layers.apply(init_weights_orthogonal_normal)
@@ -180,10 +171,6 @@ class Fcomb(nn.Module):
             z = torch.unsqueeze(z,3)
             z = self.tile(z, 3, feature_map.shape[self.spatial_axes[1]])
 
-            #Added for 3D
-            z = torch.unsqueeze(z,4)
-            z = self.tile(z, 4, feature_map.shape[self.spatial_axes[2]])
-
             #Concatenate the feature map (output of the UNet) and the sample taken from the latent space
             feature_map = torch.cat((feature_map, z), dim=self.channel_axis)
             output = self.layers(feature_map)
@@ -200,7 +187,7 @@ class ProbabilisticUnet(nn.Module):
     no_cons_per_block: no convs per block in the (convolutional) encoder of prior and posterior
     """
 
-    def __init__(self, input_channels=1, num_classes=1, num_filters=[32,64,128,192], latent_dim=6, no_convs_fcomb=4, beta=10.0, reg_alpha=1e-5, use_mean_recon_loss=True):
+    def __init__(self, input_channels=1, num_classes=1, num_filters=[32,64,128,192], latent_dim=6, no_convs_fcomb=4, beta=10.0, reg_alpha=1e-5):
         super(ProbabilisticUnet, self).__init__()
         self.input_channels = input_channels
         self.num_classes = num_classes
@@ -212,10 +199,6 @@ class ProbabilisticUnet(nn.Module):
         self.beta = beta
         self.reg_alpha = reg_alpha
         self.z_prior_sample = 0
-
-        self.use_mean_recon_loss = use_mean_recon_loss
-
-        # self.criterion = nn.BCEWithLogitsLoss(size_average = False, reduce=False, reduction=None)
 
         self.unet = Unet(self.input_channels, self.num_classes, self.num_filters, self.initializers, apply_last_layer=False, padding=True).to(device)
         self.prior = AxisAlignedConvGaussian(self.input_channels, self.num_filters, self.no_convs_per_block, self.latent_dim,  self.initializers,).to(device)
@@ -277,27 +260,6 @@ class ProbabilisticUnet(nn.Module):
             log_prior_prob = self.prior_latent_space.log_prob(z_posterior)
             kl_div = log_posterior_prob - log_prior_prob
         return kl_div
-
-    #I re-wrote the elbo earlier, but I don't know now why!!! So going with the original (Soumick)
-    # def elbo(self, segm, analytic_kl=True, reconstruct_posterior_mean=False):
-    #     """
-    #     Calculate the evidence lower bound of the log-likelihood of P(Y|X)
-    #     """        
-    #     z_posterior = self.posterior_latent_space.rsample()
-        
-    #     self.kl = torch.mean(self.kl_divergence(analytic=analytic_kl, calculate_posterior=False, z_posterior=z_posterior))
-
-    #     #Here we use the posterior sample sampled above
-    #     self.reconstruction = self.reconstruct(use_posterior_mean=reconstruct_posterior_mean, calculate_posterior=False, z_posterior=z_posterior)
-        
-    #     reconstruction_loss = ce_loss(logits=self.reconstruction, labels=segm, n_classes=self.num_classes, loss_mask=None, one_hot_labels=False)
-    #     self.reconstruction_loss = reconstruction_loss['sum']
-    #     self.mean_reconstruction_loss = reconstruction_loss['mean']
-
-    #     if self.use_mean_recon_loss:
-    #         return -(self.mean_reconstruction_loss + self.beta * self.kl)
-    #     else:
-    #         return -(self.reconstruction_loss + self.beta * self.kl)
 
     def elbo(self, segm, analytic_kl=True, reconstruct_posterior_mean=False):
         """

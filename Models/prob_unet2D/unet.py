@@ -1,6 +1,5 @@
+from Models.prob_unet2D.unet_blocks import *
 import torch.nn.functional as F
-from Models.prob_unet.unet_blocks import *
-
 
 class Unet(nn.Module):
     """
@@ -42,7 +41,7 @@ class Unet(nn.Module):
             self.upsampling_path.append(UpConvBlock(input, output, initializers, padding))
 
         if self.apply_last_layer:
-            self.last_layer = nn.Conv3d(output, num_classes, kernel_size=1)
+            self.last_layer = nn.Conv2d(output, num_classes, kernel_size=1)
             #nn.init.kaiming_normal_(self.last_layer.weight, mode='fan_in',nonlinearity='relu')
             #nn.init.normal_(self.last_layer.bias)
 

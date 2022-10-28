@@ -1,9 +1,8 @@
-import numpy as np
 import torch
 import torch.nn as nn
-from Models.prob_unet.utils import init_weights
 from torch.autograd import Variable
-
+import numpy as np
+from Models.prob_unet2D.utils import init_weights
 
 class DownConvBlock(nn.Module):
     """
@@ -15,13 +14,13 @@ class DownConvBlock(nn.Module):
         layers = []
 
         if pool:
-            layers.append(nn.AvgPool3d(kernel_size=2, stride=2, padding=0, ceil_mode=True))
+            layers.append(nn.AvgPool2d(kernel_size=2, stride=2, padding=0, ceil_mode=True))
 
-        layers.append(nn.Conv3d(input_dim, output_dim, kernel_size=3, stride=1, padding=int(padding)))
+        layers.append(nn.Conv2d(input_dim, output_dim, kernel_size=3, stride=1, padding=int(padding)))
         layers.append(nn.ReLU(inplace=True))
-        layers.append(nn.Conv3d(output_dim, output_dim, kernel_size=3, stride=1, padding=int(padding)))
+        layers.append(nn.Conv2d(output_dim, output_dim, kernel_size=3, stride=1, padding=int(padding)))
         layers.append(nn.ReLU(inplace=True))
-        layers.append(nn.Conv3d(output_dim, output_dim, kernel_size=3, stride=1, padding=int(padding)))
+        layers.append(nn.Conv2d(output_dim, output_dim, kernel_size=3, stride=1, padding=int(padding)))
         layers.append(nn.ReLU(inplace=True))
 
         self.layers = nn.Sequential(*layers)
@@ -42,14 +41,14 @@ class UpConvBlock(nn.Module):
         self.bilinear = bilinear
 
         if not self.bilinear:
-            self.upconv_layer = nn.ConvTranspose3d(input_dim, output_dim, kernel_size=2, stride=2)
+            self.upconv_layer = nn.ConvTranspose2d(input_dim, output_dim, kernel_size=2, stride=2)
             self.upconv_layer.apply(init_weights)
 
         self.conv_block = DownConvBlock(input_dim, output_dim, initializers, padding, pool=False)
 
     def forward(self, x, bridge):
         if self.bilinear:
-            up = nn.functional.interpolate(x, mode='trilinear', scale_factor=2, align_corners=True) #chaneged to trilinear for 3D
+            up = nn.functional.interpolate(x, mode='bilinear', scale_factor=2, align_corners=True)
         else:
             up = self.upconv_layer(x)
         
