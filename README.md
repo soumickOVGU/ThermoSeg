@@ -1,17 +1,17 @@
-# DS6
-Official code of the paper "DS6, Deformation-aware Semi-supervised Learning: Application to Small Vessel Segmentation with Noisy Training Data" (https://arxiv.org/abs/2006.10802)
-Recording of the live-stream of the talk at Stanford University: https://youtu.be/p1RrvlMMhOI
+# Tumour Segmentation in MR Thermometry
+
+The code was originally forked from the DS6 research (https://github.com/soumickmj/DS6) and then were modified for the current project.
+The 
 
 Docker container and pre-trained weights will soon be made available.
 
-The name of this project "DS6" was selected as a tribute to Star Trek: Deep Space Nine (DS9).
-DS6 = Deformation-aware Segmentation, trained on 6 MR Volumes. 
 
 ## Credits
 
 If you like this repository, please click on Star!
 
 If you use this approach in your research or use codes from this repository, please cite the following in your publications:
+(currentlly please cite the DS6 work till the time we update with the new publication for MR thermometry segmentation)
 
 > [Chatterjee S, Prabhu K, Pattadkal M, Bortsova G, Sarasaen C, Dubost F, Mattern H, de Bruijne M, Speck O, Nürnberger A. DS6, Deformation-Aware Semi-Supervised Learning: Application to Small Vessel Segmentation with Noisy Training Data. Journal of Imaging. 2022; 8(10):259.](https://doi.org/10.3390/jimaging8100259)
 
