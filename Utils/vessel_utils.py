@@ -35,6 +35,15 @@ __status__ = "Production"
 def minmax(array):
     return (array - array.min()) / (array.max() - array.min())
 
+def numpy_reader(path):
+    data = np.load(path)
+    if np.iscomplexobj(data):
+        data = data.astype(np.csingle)
+    else:
+        data = data.astype(np.float32)
+    affine = np.eye(4)
+    return data, affine
+
 def write_summary(writer, logger, index, original=None, reconstructed=None, focalTverskyLoss=0, diceLoss=0, diceScore=0, iou=0):
     """
     Method to write summary to the tensorboard.

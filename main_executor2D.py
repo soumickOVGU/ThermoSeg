@@ -43,22 +43,29 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--model",
                         type=int,
-                        default=5,
+                        default=4,
                         help="1{U-Net}; \n"
                              "2{U-Net_Deepsup}; \n"
                              "3{Attention-U-Net}; \n"
-                             "4{Probabilistic-U-Net};\n"
-                             "5{V2-Probabilistic-U-Net};")
+                             "4{DeepSup-Attention-U-Net};\n"
+                             "5{V2-Probabilistic-U-Net};")    
+    parser.add_argument('--cvcnn',
+                        default=True, action=argparse.BooleanOptionalAction,
+                        help="Whether or not to use CV-CNN models")
     parser.add_argument("--model_name",
                         default="trial_ProbU2Dv2_At0",
                         help="Name of the model")
-    parser.add_argument("--dataset_path", 
-                        default="/project/schatter/FranziVSeg/Data/Forrest_Organised/Fold0",
+    parser.add_argument("--input_path", 
+                        default="/project/schatter/Roopz/SarkomaV1_ComplexNII",
+                        help="Path to folder containing dataset input volumes. No need to be split into train test val"
+                             "Example: /home/dataset/")
+    parser.add_argument("--label_path", 
+                        default="/project/schatter/Roopz/Segment/Data",
                         help="Path to folder containing dataset."
-                             "Further divide folders into train,validate,test, train_label,validate_label and test_label."
+                             "Further divide folders into train_label,validate_label and test_label."
                              "Example: /home/dataset/")
     parser.add_argument('--plauslabels',
-                        default=True, action=argparse.BooleanOptionalAction,
+                        default=False, action=argparse.BooleanOptionalAction,
                         help="Whether or not to use the plausable labels (training with multiple labels randomly). This will required three additional folders inside the dataset_path: train_plausiblelabel, test_plausiblelabel, validate_plausiblelabel")
     parser.add_argument("--plauslabel_mode",
                         type=int,
@@ -68,10 +75,9 @@ if __name__ == '__main__':
                              "3{Use-Plausable-And-Main-For-TrainAndValid}; \n"
                              "4{Use-Plausable-Only-For-TrainAndValid};")
     parser.add_argument("--output_path",
-                        default="/project/schatter/FranziVSeg/Output/Forrest_ManualSeg_Fold0",
+                        default="/project/schatter/Roopz/Segment/Output",
                         help="Folder path to store output "
                              "Example: /home/output/")
-
     parser.add_argument('--train',
                         default=True, action=argparse.BooleanOptionalAction,
                         help="To train the model")
@@ -115,7 +121,7 @@ if __name__ == '__main__':
                              "2: GeomLoss Sinkhorn (Default cost function) \n"
                              "3: GeomLoss Hausdorff (Default cost function) using energy kernel (squared distances)")
     parser.add_argument('--apex',
-                        default=True, action=argparse.BooleanOptionalAction,
+                        default=False, action=argparse.BooleanOptionalAction,
                         help="To use half precision on model weights.")
 
     parser.add_argument("--batch_size",
@@ -139,7 +145,7 @@ if __name__ == '__main__':
                         default=64,
                         help="Patch size of the input volume")
     parser.add_argument("--slice2D_shape",
-                        default="480,640",
+                        default="128,128",
                         help="For 2D models, set it to the desired shape. Or blank")
     parser.add_argument("--stride_depth",
                         type=int,
@@ -147,11 +153,11 @@ if __name__ == '__main__':
                         help="Strides for dividing the input volume into patches in depth dimension (To be used during validation and inference)")
     parser.add_argument("--stride_width",
                         type=int,
-                        default=640,
+                        default=128,
                         help="Strides for dividing the input volume into patches in width dimension (To be used during validation and inference)")
     parser.add_argument("--stride_length",
                         type=int,
-                        default=480,
+                        default=128,
                         help="Strides for dividing the input volume into patches in length dimension (To be used during validation and inference)")
     parser.add_argument("--samples_per_epoch",
                         type=int,
@@ -159,7 +165,7 @@ if __name__ == '__main__':
                         help="Number of samples per epoch")
     parser.add_argument("--num_worker",
                         type=int,
-                        default=5,
+                        default=0,
                         help="Number of worker threads")
 
     args = parser.parse_args()
@@ -168,7 +174,7 @@ if __name__ == '__main__':
         args.model_name += "_Deform"
 
     MODEL_NAME = args.model_name
-    DATASET_FOLDER = args.dataset_path
+    DATASET_FOLDER = args.label_path
     OUTPUT_PATH = args.output_path
 
     LOAD_PATH = args.load_path
@@ -183,7 +189,7 @@ if __name__ == '__main__':
     test_logger = Logger(MODEL_NAME + '_test', LOGGER_PATH).get_logger()
 
     # Model
-    model = getModel(args.model, is2D=bool(args.slice2D_shape))
+    model = getModel(args.model, is2D=bool(args.slice2D_shape), isCVCNN=args.cvcnn)
     model.cuda()
     print("It's a 2D model!!" if bool(args.slice2D_shape) else "It's a 3D model!!")
 
@@ -212,9 +218,9 @@ if __name__ == '__main__':
         # if args.load_best:
         #     pipeline.load(load_best=True)
         if pipeline.ProbFlag in [1, 2]:
-            pipeline.test_prob(test_logger=test_logger)
+            pipeline.test_prob(test_logger=test_logger, input_path=args.input_path)
         else:
-            pipeline.test(test_logger=test_logger)
+            pipeline.test(test_logger=test_logger, input_path=args.input_path)
         torch.cuda.empty_cache()  # to avoid memory errors
 
     if args.predict:

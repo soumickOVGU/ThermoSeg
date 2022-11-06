@@ -18,11 +18,13 @@ import torchio as tio
 import torchvision.transforms as transforms
 from skimage.filters import threshold_otsu
 from torch import nn, optim, distributions
+import torchcomplex.nn.functional as cF
 from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 from scipy.stats import energy_distance
 from geomloss import SamplesLoss as GeomDistLoss
 from geomloss.kernel_samples import energy_kernel
+from Utils.vessel_utils import numpy_reader
 
 # from Utils.fid.fastfid import fastfid 
 
@@ -64,6 +66,7 @@ class Pipeline:
         self.plauslabels = cmd_args.plauslabels
         self.plauslabel_mode = cmd_args.plauslabel_mode
         self.model_name = cmd_args.model_name
+        self.cvcnn = cmd_args.cvcnn
 
         self.load_best = cmd_args.load_best
         self.clip_grads = cmd_args.clip_grads
@@ -103,11 +106,7 @@ class Pipeline:
             self.scaler = GradScaler()
 
         #set probabilistic property
-        if "Models.prob_unet" in self.model.__module__:
-            self.ProbFlag = 1
-            from Models.prob_unet.utils import l2_regularisation
-            self.l2_regularisation = l2_regularisation
-        elif "Models.ProbUNetV2" in self.model.__module__:
+        if "Models.ProbUNetV2" in self.model.__module__:
             self.ProbFlag = 2
             self.criterion_segmentation = FocalTverskyLoss()
             self.criterion_latent = distributions.kl_divergence
@@ -143,8 +142,8 @@ class Pipeline:
             
 
         if cmd_args.train: #Only if training is to be performed
-            traindataset = self.create_TIOSubDS(vol_path=self.DATASET_FOLDER + '/train/', label_path=self.DATASET_FOLDER + '/train_label/', crossvalidation_set=training_set, plauslabels_path=self.DATASET_FOLDER + '/train_plausiblelabel/' if cmd_args.plauslabels else "")
-            validationdataset = self.create_TIOSubDS(vol_path=self.DATASET_FOLDER + '/validate/', label_path=self.DATASET_FOLDER + '/validate_label/', crossvalidation_set=validation_set, is_train=False, plauslabels_path=self.DATASET_FOLDER + '/validate_plausiblelabel/' if cmd_args.plauslabels else "")
+            traindataset = self.create_TIOSubDS(vol_path=cmd_args.input_path, label_path=self.DATASET_FOLDER + '/train_label/', crossvalidation_set=training_set, plauslabels_path=self.DATASET_FOLDER + '/train_plausiblelabel/' if cmd_args.plauslabels else "")
+            validationdataset = self.create_TIOSubDS(vol_path=cmd_args.input_path, label_path=self.DATASET_FOLDER + '/validate_label/', crossvalidation_set=validation_set, is_train=False, plauslabels_path=self.DATASET_FOLDER + '/validate_plausiblelabel/' if cmd_args.plauslabels else "")
 
             self.train_loader = torch.utils.data.DataLoader(traindataset, batch_size=self.batch_size, shuffle=True,
                                                             num_workers=0) 
@@ -152,23 +151,34 @@ class Pipeline:
                                                                 num_workers=self.num_worker)
     
     def create_TIOSubDS(self, vol_path, label_path, crossvalidation_set=None, is_train=True, get_subjects_only=False, transforms=None, plauslabels_path=""):
-        vols = glob(vol_path + "*.nii") + glob(vol_path + "*.nii.gz")
-        labels = glob(label_path + "*.nii") + glob(label_path + "*.nii.gz")
+        vols = glob(vol_path + '/**/*.nii', recursive=True) + glob(vol_path + '/**/*.nii.gz', recursive=True) + glob(vol_path + '/**/*.npy', recursive=True)
+        labels = glob(label_path + '/**/*.nii', recursive=True) + glob(label_path + '/**/*.nii.gz', recursive=True) + glob(label_path + '/**/*.npy', recursive=True)        
         subjects = []
         for i in range(len(vols)):
-            v = vols[i]
-            filename = os.path.basename(v).split('.')[0]
-            l = [s for s in labels if filename in s][0]
+            v = vols[i]            
+            filename = os.path.basename(os.path.splitext(v)[0])
+            nameparts = filename.split("_")
+            nameparts[0] = nameparts[0].replace("Sub", "")
+            l = [s for s in labels if "/".join(nameparts) in s]
+            if len(l) == 0:
+                l = [s for s in labels if "/".join(nameparts).replace("Serie0","Series").replace("EchoTime/", "EchoTime_") in s] #because the input has Serie and label has Series
+            if len(l) == 0:
+                continue
+            l = l[0]
             kwargs_dict = {
-                "img":tio.ScalarImage(v),
-                "label":tio.LabelMap(l),
+                "img":tio.ScalarImage(v) if ".npy" not in v else tio.ScalarImage(v, reader=numpy_reader),
                 "subjectname":filename,
             }
+            if ".npy" in v:
+                kwargs_dict["label"] = tio.LabelMap(l) if ".npy" not in l else tio.LabelMap(l, reader=numpy_reader)
+            else:
+                kwargs_dict["label"] = tio.LabelMap(l, affine=np.eye(4)) if ".npy" not in l else tio.LabelMap(l, reader=numpy_reader, affine=np.eye(4))
+            
             if plauslabels_path != "":
                 p_labels = sorted(glob(plauslabels_path + filename + "*.nii*"))
                 for i, pLbl in enumerate(p_labels):
                     kwargs_dict["p_label_"+str(i)] = tio.LabelMap(pLbl)
-            subject = tio.Subject(**kwargs_dict)
+            subject = tio.Subject(**kwargs_dict)               
             subjects.append(subject)   
 
         if get_subjects_only:
@@ -200,7 +210,7 @@ class Pipeline:
 
     def normaliser(self, batch):
         for i in range(batch.shape[0]):
-            batch[i] = batch[i] / batch[i].max()
+            batch[i] = (batch[i] / torch.abs(batch[i]).max()) if torch.is_complex(batch[i]) else (batch[i] / batch[i].max())
         return batch
 
     def load(self, checkpoint_path=None, load_best=True):
@@ -224,8 +234,10 @@ class Pipeline:
             total_floss = 0
             batch_index = 0
             for batch_index, patches_batch in enumerate(tqdm(self.train_loader)):
-
-                local_batch = self.normaliser(patches_batch['img'][tio.DATA].float().cuda())
+                if self.cvcnn:
+                    local_batch = self.normaliser(patches_batch['img'][tio.DATA].cfloat().cuda())
+                else:
+                    local_batch = self.normaliser(abs(patches_batch['img'][tio.DATA]).float().cuda())
                 if self.plauslabels:
                     labels = [k for k in patches_batch.keys() if "p_label" in k]
                     if self.plauslabel_mode in [1,3]:
@@ -272,14 +284,18 @@ class Pipeline:
                     # -------------------------------------------------------------------------------------------------
                     # First Branch Supervised error
                     if self.ProbFlag == 0:
-                        for output in self.model(local_batch): 
-                            if level == 0:
-                                output1 = output
-                            if level > 0:  # then the output size is reduced, and hence interpolate to patch_size
-                                output = torch.nn.functional.interpolate(input=output, size=self.patch_size[:2] if self.dimMode == 2 else self.patch_size)
-                            output = torch.sigmoid(output)
-                            floss += loss_ratios[level] * self.focalTverskyLoss(output, local_labels)
-                            level += 1
+                        if hasattr(self.model, 'forward_pass'):
+                            floss, output = self.model.forward_pass(self.model, local_batch, local_labels, self.focalTverskyLoss)  
+                            output1 = output
+                        else:
+                            for output in self.model(local_batch): 
+                                if level == 0:
+                                    output1 = output
+                                if level > 0:  # then the output size is reduced, and hence interpolate to patch_size
+                                    output = torch.nn.functional.interpolate(input=output, size=self.patch_size[:2] if self.dimMode == 2 else self.patch_size)
+                                output = cF.sigmoid(output) if self.cvcnn else torch.sigmoid(output)
+                                floss += loss_ratios[level] * self.focalTverskyLoss(output, local_labels) 
+                                level += 1
                     elif self.ProbFlag == 1:
                         self.model.forward(local_batch, local_labels, training=True)
                         elbo = self.model.elbo(local_labels, analytic_kl=True)
@@ -320,15 +336,19 @@ class Pipeline:
                         level = 0
                         # ------------------------------------------------------------------------------
                         # Second Branch Supervised error
-                        for output in self.model(local_batch_xt):
-                            if level == 0:
-                                output2 = output
-                            if level > 0:  # then the output size is reduced, and hence interpolate to patch_size
-                                output = torch.nn.functional.interpolate(input=output, size=self.patch_size[:2] if self.dimMode == 2 else self.patch_size)
+                        if hasattr(self.model, 'forward_pass'):
+                            floss2, output = self.model.forward_pass(self.model, local_batch_xt, local_labels_xt, self.focalTverskyLoss)  
+                            output2 = output
+                        else:
+                            for output in self.model(local_batch_xt):
+                                if level == 0:
+                                    output2 = output
+                                if level > 0:  # then the output size is reduced, and hence interpolate to patch_size
+                                    output = torch.nn.functional.interpolate(input=output, size=self.patch_size[:2] if self.dimMode == 2 else self.patch_size)
 
-                            output = torch.sigmoid(output)
-                            floss2 += loss_ratios[level] * self.focalTverskyLoss(output, local_labels_xt)
-                            level += 1
+                                output = torch.sigmoid(output)
+                                floss2 += loss_ratios[level] * self.focalTverskyLoss(output, local_labels_xt)
+                                level += 1
 
                         # -------------------------------------------------------------------------------------------
                         # Consistency loss
@@ -367,7 +387,16 @@ class Pipeline:
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
-                    floss.backward()
+                    if type(floss) is list:
+                        for i in range(len(floss)):
+                            if i+1 == len(floss): #final loss
+                                floss[i].backward()
+                            else:
+                                floss[i].backward(retain_graph=True)
+                        floss = torch.sum(torch.stack(floss))
+                    else:
+                        floss.backward()
+
                     if self.clip_grads:
                         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)
                         torch.nn.utils.clip_grad_value_(self.model.parameters(), 1)
@@ -431,7 +460,10 @@ class Pipeline:
                 self.logger.info("loading" + str(index))
                 no_patches += 1
 
-                local_batch = self.normaliser(patches_batch['img'][tio.DATA].float().cuda())
+                if self.cvcnn:
+                    local_batch = self.normaliser(patches_batch['img'][tio.DATA].cfloat().cuda())
+                else:
+                    local_batch = self.normaliser(abs(patches_batch['img'][tio.DATA]).float().cuda())
                 if self.plauslabels and self.plauslabel_mode>=3 and not self.distloss:
                     labels = [k for k in patches_batch.keys() if "p_label" in k]
                     if self.plauslabel_mode == 3:
@@ -470,15 +502,19 @@ class Pipeline:
 
                         # Forward propagation
                         if self.ProbFlag == 0:
-                            for output in self.model(local_batch):
-                                if level == 0:
-                                    output1 = output
-                                if level > 0:  # then the output size is reduced, and hence interpolate to patch_size
-                                    output = torch.nn.functional.interpolate(input=output, size=self.patch_size[:2] if self.dimMode == 2 else self.patch_size)
+                            if hasattr(self.model, 'forward_pass'):
+                                floss_iter, output = self.model.forward_pass(self.model, local_batch, local_labels, self.focalTverskyLoss)  
+                                output1 = output
+                            else:
+                                for output in self.model(local_batch):
+                                    if level == 0:
+                                        output1 = output
+                                    if level > 0:  # then the output size is reduced, and hence interpolate to patch_size
+                                        output = torch.nn.functional.interpolate(input=output, size=self.patch_size[:2] if self.dimMode == 2 else self.patch_size)
 
-                                output = torch.sigmoid(output)
-                                floss_iter += loss_ratios[level] * self.focalTverskyLoss(output, local_labels)
-                                level += 1
+                                    output = cF.sigmoid(output) if self.cvcnn else torch.sigmoid(output)
+                                    floss_iter += loss_ratios[level] * self.focalTverskyLoss(output, local_labels)
+                                    level += 1
                         elif self.ProbFlag == 1:
                             self.model.forward(local_batch, training=False)
                             output1 = self.model.sample(testing=True)
@@ -548,11 +584,11 @@ class Pipeline:
 
             save_model(self.checkpoint_path, chk_dict)
 
-    def test(self, test_logger, save_results=True, test_subjects=None): #for testing models other than Probabilistic UNets
+    def test(self, test_logger, input_path=None, save_results=True, test_subjects=None): #for testing models other than Probabilistic UNets
         test_logger.debug('Testing...')
 
         if test_subjects is None:
-            test_folder_path = self.DATASET_FOLDER + '/test/'
+            test_folder_path = self.DATASET_FOLDER + '/test/' if input_path is None else input_path
             test_label_path = self.DATASET_FOLDER + '/test_label/'
 
             test_subjects = self.create_TIOSubDS(vol_path=test_folder_path, label_path=test_label_path, get_subjects_only=True)
@@ -584,7 +620,10 @@ class Pipeline:
                 patch_loader = torch.utils.data.DataLoader(grid_sampler, batch_size=self.batch_size, shuffle=False, num_workers=self.num_worker)
 
                 for index, patches_batch in enumerate(tqdm(patch_loader)):
-                    local_batch = self.normaliser(patches_batch['img'][tio.DATA].float().cuda())
+                    if self.cvcnn:
+                        local_batch = self.normaliser(patches_batch['img'][tio.DATA].cfloat().cuda())
+                    else:
+                        local_batch = self.normaliser(abs(patches_batch['img'][tio.DATA]).float().cuda())
                     local_labels = patches_batch['label'][tio.DATA].float().cuda()
                     locations = patches_batch[tio.LOCATION]
 
@@ -698,7 +737,10 @@ class Pipeline:
 
                 distloss = 0
                 for index, patches_batch in enumerate(tqdm(patch_loader)):
-                    local_batch = self.normaliser(patches_batch['img'][tio.DATA].float().cuda())
+                    if self.cvcnn:
+                        local_batch = self.normaliser(patches_batch['img'][tio.DATA].cfloat().cuda())
+                    else:
+                        local_batch = self.normaliser(abs(patches_batch['img'][tio.DATA]).float().cuda())
                     # local_labels = patches_batch['label'][tio.DATA].float().cuda()
                     locations = patches_batch[tio.LOCATION]
 

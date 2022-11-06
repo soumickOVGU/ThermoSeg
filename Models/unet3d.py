@@ -11,6 +11,7 @@ Purpose :
 import torch
 import torch.nn as nn
 import torch.utils.data
+import torchcomplex.nn as cnn
 
 __author__ = "Kartik Prabhu, Mahantesh Pattadkal, and Soumick Chatterjee"
 __copyright__ = "Copyright 2020, Faculty of Computer Science, Otto von Guericke University Magdeburg, Germany"
@@ -26,18 +27,30 @@ class conv_block(nn.Module):
     Convolution Block
     """
 
-    def __init__(self, in_channels, out_channels, k_size=3, stride=1, padding=1, bias=True):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, padding=1, bias=True, is_complex=False):
         super(conv_block, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
-                      stride=stride, padding=padding, bias=bias),
-            nn.BatchNorm3d(num_features=out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=k_size,
-                      stride=stride, padding=padding, bias=bias),
-            nn.BatchNorm3d(num_features=out_channels),
-            nn.ReLU(inplace=True)
-        )
+        if is_complex:
+            self.conv = cnn.Sequential(
+                cnn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
+                        stride=stride, padding=padding, bias=bias),
+                cnn.BatchNorm3d(num_features=out_channels),
+                cnn.CReLU(inplace=True),
+                cnn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=k_size,
+                        stride=stride, padding=padding, bias=bias),
+                cnn.BatchNorm3d(num_features=out_channels),
+                cnn.CReLU(inplace=True)
+            )
+        else:
+            self.conv = nn.Sequential(
+                nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
+                        stride=stride, padding=padding, bias=bias),
+                nn.BatchNorm3d(num_features=out_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=k_size,
+                        stride=stride, padding=padding, bias=bias),
+                nn.BatchNorm3d(num_features=out_channels),
+                nn.ReLU(inplace=True)
+            )
 
     def forward(self, x):
         x = self.conv(x)
@@ -50,14 +63,24 @@ class up_conv(nn.Module):
     """
 
     # def __init__(self, in_ch, out_ch):
-    def __init__(self, in_channels, out_channels, k_size=3, stride=1, padding=1, bias=True):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, padding=1, bias=True, is_complex=False):
         super(up_conv, self).__init__()
-        self.up = nn.Sequential(
-            nn.Upsample(scale_factor=2),
-            nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
-                      stride=stride, padding=padding, bias=bias),
-            nn.BatchNorm3d(num_features=out_channels),
-            nn.ReLU(inplace=True))
+        if is_complex:
+            self.up = cnn.Sequential(
+                cnn.Upsample(scale_factor=2),
+                cnn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
+                        stride=stride, padding=padding, bias=bias),
+                cnn.BatchNorm3d(num_features=out_channels),
+                cnn.CReLU(inplace=True)
+            )
+        else:
+            self.up = nn.Sequential(
+                nn.Upsample(scale_factor=2),
+                nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=k_size,
+                        stride=stride, padding=padding, bias=bias),
+                nn.BatchNorm3d(num_features=out_channels),
+                nn.ReLU(inplace=True)
+            )
 
     def forward(self, x):
         x = self.up(x)
@@ -71,36 +94,40 @@ class U_Net(nn.Module):
     Paper : https://arxiv.org/abs/1505.04597
     """
 
-    def __init__(self, in_ch=1, out_ch=1):
+    def __init__(self, in_ch=1, out_ch=1, is_complex=False, out_mode=0):
         super(U_Net, self).__init__()
 
         n1 = 64 #TODO: make params
         filters = [n1, n1 * 2, n1 * 4, n1 * 8, n1 * 16]  # 64,128,256,512,1024
 
-        self.Maxpool1 = nn.MaxPool3d(kernel_size=2, stride=2)
-        self.Maxpool2 = nn.MaxPool3d(kernel_size=2, stride=2)
-        self.Maxpool3 = nn.MaxPool3d(kernel_size=2, stride=2)
-        self.Maxpool4 = nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Maxpool1 = cnn.MaxPool3d(kernel_size=2, stride=2) if is_complex else nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Maxpool2 = cnn.MaxPool3d(kernel_size=2, stride=2) if is_complex else nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Maxpool3 = cnn.MaxPool3d(kernel_size=2, stride=2) if is_complex else nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Maxpool4 = cnn.MaxPool3d(kernel_size=2, stride=2) if is_complex else nn.MaxPool3d(kernel_size=2, stride=2)
 
-        self.Conv1 = conv_block(in_ch, filters[0])
-        self.Conv2 = conv_block(filters[0], filters[1])
-        self.Conv3 = conv_block(filters[1], filters[2])
-        self.Conv4 = conv_block(filters[2], filters[3])
-        self.Conv5 = conv_block(filters[3], filters[4])
+        self.Conv1 = conv_block(in_ch, filters[0], is_complex=is_complex)
+        self.Conv2 = conv_block(filters[0], filters[1], is_complex=is_complex)
+        self.Conv3 = conv_block(filters[1], filters[2], is_complex=is_complex)
+        self.Conv4 = conv_block(filters[2], filters[3], is_complex=is_complex)
+        self.Conv5 = conv_block(filters[3], filters[4], is_complex=is_complex)
 
-        self.Up5 = up_conv(filters[4], filters[3])
-        self.Up_conv5 = conv_block(filters[4], filters[3])
+        self.Up5 = up_conv(filters[4], filters[3], is_complex=is_complex)
+        self.Up_conv5 = conv_block(filters[4], filters[3], is_complex=is_complex)
 
-        self.Up4 = up_conv(filters[3], filters[2])
-        self.Up_conv4 = conv_block(filters[3], filters[2])
+        self.Up4 = up_conv(filters[3], filters[2], is_complex=is_complex)
+        self.Up_conv4 = conv_block(filters[3], filters[2], is_complex=is_complex)
 
-        self.Up3 = up_conv(filters[2], filters[1])
-        self.Up_conv3 = conv_block(filters[2], filters[1])
+        self.Up3 = up_conv(filters[2], filters[1], is_complex=is_complex)
+        self.Up_conv3 = conv_block(filters[2], filters[1], is_complex=is_complex)
 
-        self.Up2 = up_conv(filters[1], filters[0])
-        self.Up_conv2 = conv_block(filters[1], filters[0])
+        self.Up2 = up_conv(filters[1], filters[0], is_complex=is_complex)
+        self.Up_conv2 = conv_block(filters[1], filters[0], is_complex=is_complex)
 
-        self.Conv = nn.Conv3d(filters[0], out_ch, kernel_size=1, stride=1, padding=0)
+        self.Conv = cnn.Conv3d(filters[0], out_ch, kernel_size=1, stride=1, padding=0) if is_complex else nn.Conv3d(filters[0], out_ch, kernel_size=1, stride=1, padding=0)
+
+        self.is_complex = is_complex
+        self.out_mode = out_mode
+
 
     # self.active = torch.nn.Sigmoid()
 
@@ -165,7 +192,12 @@ class U_Net(nn.Module):
         # print(out.shape)
         # d1 = self.active(out)
 
-        return [out]
+        if not self.is_complex or self.out_mode == 0:
+            return [out]
+        elif self.out_mode == 1:
+            return [torch.abs(out)]
+        elif self.out_mode == 2:
+            return [out.real]
 
 class U_Net_DeepSup(nn.Module):
     """
@@ -174,42 +206,45 @@ class U_Net_DeepSup(nn.Module):
     Paper : https://arxiv.org/abs/1505.04597
     """
 
-    def __init__(self, in_ch=1, out_ch=1):
+    def __init__(self, in_ch=1, out_ch=1, is_complex=False, out_mode=0):
         super(U_Net_DeepSup, self).__init__()
 
         n1 = 64
         filters = [n1, n1 * 2, n1 * 4, n1 * 8, n1 * 16]  # 64,128,256,512,1024
 
-        self.Maxpool1 = nn.MaxPool3d(kernel_size=2, stride=2)
-        self.Maxpool2 = nn.MaxPool3d(kernel_size=2, stride=2)
-        self.Maxpool3 = nn.MaxPool3d(kernel_size=2, stride=2)
-        self.Maxpool4 = nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Maxpool1 = cnn.MaxPool3d(kernel_size=2, stride=2) if is_complex else nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Maxpool2 = cnn.MaxPool3d(kernel_size=2, stride=2) if is_complex else nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Maxpool3 = cnn.MaxPool3d(kernel_size=2, stride=2) if is_complex else nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Maxpool4 = cnn.MaxPool3d(kernel_size=2, stride=2) if is_complex else nn.MaxPool3d(kernel_size=2, stride=2)
 
-        self.Conv1 = conv_block(in_ch, filters[0])
-        self.Conv2 = conv_block(filters[0], filters[1])
-        self.Conv3 = conv_block(filters[1], filters[2])
-        self.Conv4 = conv_block(filters[2], filters[3])
-        self.Conv5 = conv_block(filters[3], filters[4])
+        self.Conv1 = conv_block(in_ch, filters[0], is_complex=is_complex)
+        self.Conv2 = conv_block(filters[0], filters[1], is_complex=is_complex)
+        self.Conv3 = conv_block(filters[1], filters[2], is_complex=is_complex)
+        self.Conv4 = conv_block(filters[2], filters[3], is_complex=is_complex)
+        self.Conv5 = conv_block(filters[3], filters[4], is_complex=is_complex)
 
         #1x1x1 Convolution for Deep Supervision
-        self.Conv_d3 = conv_block(filters[1], 1)
-        self.Conv_d4 = conv_block(filters[2], 1)
+        self.Conv_d3 = conv_block(filters[1], 1, is_complex=is_complex)
+        self.Conv_d4 = conv_block(filters[2], 1, is_complex=is_complex)
 
 
 
-        self.Up5 = up_conv(filters[4], filters[3])
-        self.Up_conv5 = conv_block(filters[4], filters[3])
+        self.Up5 = up_conv(filters[4], filters[3], is_complex=is_complex)
+        self.Up_conv5 = conv_block(filters[4], filters[3], is_complex=is_complex)
 
-        self.Up4 = up_conv(filters[3], filters[2])
-        self.Up_conv4 = conv_block(filters[3], filters[2])
+        self.Up4 = up_conv(filters[3], filters[2], is_complex=is_complex)
+        self.Up_conv4 = conv_block(filters[3], filters[2], is_complex=is_complex)
 
-        self.Up3 = up_conv(filters[2], filters[1])
-        self.Up_conv3 = conv_block(filters[2], filters[1])
+        self.Up3 = up_conv(filters[2], filters[1], is_complex=is_complex)
+        self.Up_conv3 = conv_block(filters[2], filters[1], is_complex=is_complex)
 
-        self.Up2 = up_conv(filters[1], filters[0])
-        self.Up_conv2 = conv_block(filters[1], filters[0])
+        self.Up2 = up_conv(filters[1], filters[0], is_complex=is_complex)
+        self.Up_conv2 = conv_block(filters[1], filters[0], is_complex=is_complex)
 
-        self.Conv = nn.Conv3d(filters[0], out_ch, kernel_size=1, stride=1, padding=0)
+        self.Conv = cnn.Conv3d(filters[0], out_ch, kernel_size=1, stride=1, padding=0) if is_complex else nn.Conv3d(filters[0], out_ch, kernel_size=1, stride=1, padding=0)
+
+        self.is_complex = is_complex
+        self.out_mode = out_mode
 
         for submodule in self.modules():
             submodule.register_forward_hook(self.nan_hook)
@@ -290,6 +325,20 @@ class U_Net_DeepSup(nn.Module):
         # print(out.shape)
         # d1 = self.active(out)
 
-        return [out, d3_out , d4_out]
+        if not self.is_complex or self.out_mode == 0:
+            return [out, d3_out , d4_out]
+        elif self.out_mode == 1:
+            return [torch.abs(out), torch.abs(d3_out) , torch.abs(d4_out)]
+        elif self.out_mode == 2:
+            return [out.real, d3_out.real , d4_out.real]
 
 
+            
+
+
+if __name__=='__main__':
+    # aunet = U_Net(is_complex=True).cuda()
+    aunet = U_Net_DeepSup(is_complex=True).cuda()
+    inp = torch.randn(1, 1, 64, 64, 64, dtype=torch.cfloat).cuda()
+    out = aunet(inp)
+    print(out[-1].shape)
